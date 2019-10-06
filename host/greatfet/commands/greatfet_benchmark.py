@@ -56,7 +56,7 @@ def run_sync_benchmark(gf, data_to_transfer):
     data_mib  = round(total_data / 1024 / 1024, 2)
     speed_mib = round(data_mib / total_seconds, 2)
 
-    print("Transferred {} MiB in {} seconds. (Speed: {} MiB/S)".format(data_mib, total_seconds, speed_mib))
+    print("Transferred {} MiB in {} seconds. (Speed: {} MiB/s)".format(data_mib, total_seconds, speed_mib))
 
 
 def run_async_benchmark(gf, data_to_transfer):
@@ -138,7 +138,7 @@ def run_async_benchmark(gf, data_to_transfer):
     data_mib  = round(total_data / 1024 / 1024, 2)
     speed_mib = round(data_mib / total_seconds, 2)
 
-    print("Transferred {} MiB in {} seconds. (Speed: {} MiB/S)".format(data_mib, total_seconds, speed_mib))
+    print("Transferred {} MiB in {} seconds. (Speed: {} MiB/s)".format(data_mib, total_seconds, speed_mib))
 
 
 def main():
