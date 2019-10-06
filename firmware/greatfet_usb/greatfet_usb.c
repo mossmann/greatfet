@@ -63,8 +63,9 @@ void init_usb0(void) {
 	usb_run(&usb_peripherals[0]);
 }
 
-// XXX:
+// FIXME: move to scheduler module
 void service_usb_analysis(void);
+void service_benchmarking(void);
 
 // XXX
 int rhododendron_early_init(void);
@@ -103,6 +104,7 @@ int main(void) {
 		service_glitchkit();
 		service_usb_analysis();
 		service_rhododendron();
+		service_benchmarking();
 	}
 
 	return 0;

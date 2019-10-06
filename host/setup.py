@@ -61,6 +61,8 @@ setup(
             'greatfet_loadable = greatfet.commands.greatfet_loadable:main',
             'greatfet_usb-capture = greatfet.commands.greatfet_usb_capture:main',
             'greatfet_uart = greatfet.commands.greatfet_uart:main',
+            'greatfet_benchmark = greatfet.commands.greatfet_benchmark:main',
+
         ],
     },
     author='Great Scott Gadgets',
