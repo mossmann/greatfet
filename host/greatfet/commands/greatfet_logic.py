@@ -4,12 +4,13 @@
 
 from __future__ import print_function
 
-import argparse
-import errno
-import sys
-import time
 import os
+import sys
+import usb1
+import time
+import errno
 import array
+import argparse
 import tempfile
 import threading
 
@@ -26,8 +27,8 @@ from greatfet.utils import GreatFETArgumentParser, eng_notation, from_eng_notati
 # Default sample-delivery timeout.
 SAMPLE_DELIVERY_TIMEOUT_MS   = 3000
 
-# Default number of pre-allocated buffers.
-DEFAULT_PREALLOCATED_BUFFERS = 4096
+# Default number of transfers to have allocated simultaneously.
+DEFAULT_PREALLOCATED_TRANSFERS = 16
 
 
 def unpack_data(data, bus_width):
@@ -266,6 +267,10 @@ def main():
 
     # Create queues of transfer objects that we'll use as a producer/consumer interface for our comm thread.
     full_buffers  = []
+    active_transfers = []
+    pending_error = None
+    experienced_overrun = False
+
 
     # Allocate a set of transfer buffers, so we don't have to continuously allocate them.
     # Finally, spawn the thread that will handle our data processing and output.
@@ -273,33 +278,84 @@ def main():
     thread_arguments    = (termination_request, args, bus_width, bin_file, full_buffers)
     data_thread         = threading.Thread(target=background_process_data, args=thread_arguments)
 
+    # Create a call-back to be executed when each transfer completes
+    def _handle_completed_transfer(transfer):
+        nonlocal device, full_buffers, experienced_overrun, termination_request, pending_error
+
+        if termination_request.is_set():
+            return
+
+        status = transfer.getStatus()
+
+        # If the transfer completed successfully, handle its data.
+        if status == usb1.TRANSFER_COMPLETED:
+
+            # Extract the data from the relevant transfer...
+            data = transfer.getBuffer()[:transfer.getActualLength()]
+
+            # ... submit it to our processing thread for handling ...
+            full_buffers.append(data)
+
+            # ... and re-submit the transfer.
+            try:
+                transfer.submit()
+
+            # If our transfer re-submission is stalled; we've encountered an overrun.
+            except usb1.USBErrorPipe:
+                experienced_overrun = True
+
+        # If it stalled, we've encountered an overrun. Mark our status, so our main loop
+        # can handle it accordingly.
+        elif status == usb1.TRANSFER_STALL:
+            experienced_overrun = True
+        else:
+            pending_error = IOError("USB transfer failed: {}".format(status))
+
+
+    # FIXME: replace this fixed interface with a query for the interface
+    device.comms.device.claimInterface(1)
+
     # Now that we're done with all of that setup, perform our actual sampling, in a tight loop,
     data_thread.start()
     device.apis.logic_analyzer.start()
+
+    # Allocate a set of USB transfer to perform the core data transfer.
+    # Note that these must be allocated _after_ logic_analyzer.start()
+    for _ in range(DEFAULT_PREALLOCATED_TRANSFERS):
+        # Populate the transfer object...
+        transfer = device.comms.device.getTransfer()
+        transfer.setBulk(endpoint, buffer_size, callback=_handle_completed_transfer, timeout=3000)
+
+        # ... and submit it for processing.
+        transfer.submit()
+        active_transfers.append(transfer)
+
+
     start_time = time.time()
-
-    device.comms.device.claimInterface(1)
-
     try:
+
         while True:
 
-            # Capture data from the device, and unpack it.
-            data = device.comms.device.read(endpoint, buffer_size, 3000)
+            # Constantly handle asynchronous transfer events.
+            device.comms.handle_events()
 
-            # ... and pop it into the to-be-processed queue.
-            full_buffers.append(data)
+            # If we experience an overrun, handle it and fail out.
+            if experienced_overrun:
+                raise usb1.USBErrorPipe("Overrun detected!")
+            if pending_error:
+                raise pending_error
 
     except KeyboardInterrupt:
         pass
-    except usb.core.USBError as e:
+    except usb1.USBErrorPipe:
         log_error("")
-        if e.errno == 32:
-            log_error("ERROR: Couldn't pull data from the device fast enough! Aborting.")
-            log_error("(Lowering the sample rate may help. Sometimes, switching to another USB bus / port may help.)")
-        else:
-            log_error("ERROR: Communications failure -- check the connection to -- and state of  -- the GreatFET. ")
-            log_error("(More debug information may be available if you run 'gf dmesg').")
-            log_error(e)
+        log_error("ERROR: Couldn't pull data from the device fast enough! Aborting.")
+        log_error("(Lowering the sample rate may help. Sometimes, switching to another USB bus / port may help.)")
+    except (IOError, usb1.libusb1.USBError) as e:
+        log_error("")
+        log_error("ERROR: Communications failure -- check the connection to -- and state of  -- the GreatFET. ")
+        log_error("(More debug information may be available if you run 'gf dmesg').")
+        log_error(e)
     finally:
         elapsed_time = time.time() - start_time
 
@@ -308,6 +364,15 @@ def main():
 
         # Signal to our data processing thread that it's time to terminate.
         termination_request.set()
+
+        # Cancel each of our pending transfers, and ensure it's never submitted again.
+        #for transfer in active_transfers:
+        #    transfer.cancel()
+        #    transfer.doom()
+
+        # FIXME: look up the interface number from the endpoint
+        device.comms.device.releaseInterface(1)
+
 
     # Wait for our data processing thread to complete.
     log_function('')
@@ -327,6 +392,9 @@ def main():
 
     # Print how long we sampled for, as a nicety.
     log_function("Sampled for {} seconds.".format(round(elapsed_time, 4)))
+
+    # Finally, close the application. For now, we'll use a hard close.
+    os._exit(0)
 
 
 if __name__ == '__main__':
