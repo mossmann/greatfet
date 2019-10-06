@@ -134,7 +134,7 @@ def emit_sigrok_file(filename, sample_file_source, bus_width, sample_rate, first
         zip.writestr("version", "2")
 
 
-def background_process_data(termination_request, args, bus_width, bin_file, empty_buffers, full_buffers):
+def background_process_data(termination_request, args, bus_width, bin_file, full_buffers):
     """ Thread that handles processing our samples in the background. """
 
     # Process in the background until we're explicitly terminated.
@@ -166,13 +166,6 @@ def background_process_data(termination_request, args, bus_width, bin_file, empt
             bin_file.write(samples)
         if args.write_to_stdout:
             sys.stdout.buffer.write(samples)
-
-        # ... and add the buffer back to our empty list.
-        empty_buffers.append(active_buffer)
-
-
-def allocate_transfer_buffer(buffer_size):
-    return array.array('B', b"\0" * buffer_size)
 
 
 def main():
@@ -272,16 +265,12 @@ def main():
         bin_file_name = bin_file.name
 
     # Create queues of transfer objects that we'll use as a producer/consumer interface for our comm thread.
-    empty_buffers = []
     full_buffers  = []
 
     # Allocate a set of transfer buffers, so we don't have to continuously allocate them.
-    for _ in range(DEFAULT_PREALLOCATED_BUFFERS):
-        empty_buffers.append(allocate_transfer_buffer(buffer_size))
-
     # Finally, spawn the thread that will handle our data processing and output.
     termination_request = threading.Event()
-    thread_arguments    = (termination_request, args, bus_width, bin_file, empty_buffers, full_buffers)
+    thread_arguments    = (termination_request, args, bus_width, bin_file, full_buffers)
     data_thread         = threading.Thread(target=background_process_data, args=thread_arguments)
 
     # Now that we're done with all of that setup, perform our actual sampling, in a tight loop,
@@ -289,21 +278,16 @@ def main():
     device.apis.logic_analyzer.start()
     start_time = time.time()
 
+    device.comms.device.claimInterface(1)
+
     try:
         while True:
 
-            # Grab a transfer buffer from the empty list...
-            try:
-                transfer_buffer = empty_buffers.pop()
-            except IndexError:
-                # If we don't have a buffer to fill, allocate a new one. It'll wind up in our buffer pool shortly.
-                transfer_buffer = allocate_transfer_buffer(buffer_size)
-
             # Capture data from the device, and unpack it.
-            device.comms.device.read(endpoint, transfer_buffer, 3000)
+            data = device.comms.device.read(endpoint, buffer_size, 3000)
 
             # ... and pop it into the to-be-processed queue.
-            full_buffers.append(transfer_buffer)
+            full_buffers.append(data)
 
     except KeyboardInterrupt:
         pass
