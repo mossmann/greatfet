@@ -160,7 +160,9 @@ def background_process_data(termination_request, args, bus_width, bin_file, full
         active_buffer = full_buffers.pop(0)
 
         # Assuming we got a data buffer, process it.
-        samples = bytes(active_buffer)
+        samples = bytes()
+        for i in range(0, 16384, 1024):
+            samples += bytes(active_buffer[i:i+256])
 
         # Output the samples to the appropriate targets.
         if args.pulseview or args.binary:
